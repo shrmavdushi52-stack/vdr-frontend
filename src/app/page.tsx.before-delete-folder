@@ -1,0 +1,593 @@
+﻿"use client";
+
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { ChangeEvent, DragEvent, ReactNode } from "react";
+import {
+  loadUploads,
+  saveUpload,
+  updateUploadMetadata,
+  deleteUpload,
+} from "@/lib/vdr-storage";
+import {
+  Activity, AlertTriangle, ArrowUpDown, Bell, CheckCircle2, ChevronRight,
+  Clock3, Download, Eye, File, FileImage, FileJson, FileSpreadsheet, FileText,
+  Folder, FolderOpen, Grid2X2, HardDrive, History, LayoutDashboard, List, Network,
+  LockKeyhole, Menu, MessageSquareText, Moon, MoreHorizontal, Pencil, Plus, Search, Settings,
+  Shield, ShieldCheck, Sun, Trash2, Upload, Users, X,
+} from "lucide-react";
+
+type Sensitivity = "Confidential" | "Public" | "Internal Only" | "Restricted";
+type Role = "Admin" | "Compliance Officer" | "Advisor" | "Auditor";
+type Permission = { view: boolean; edit: boolean; share: boolean };
+type DocumentItem = {
+  id: string; name: string; category: string; owner: string; modified: string;
+  size: string; type: string; status: "Approved" | "Pending" | "Review";
+  sensitivity: Sensitivity; content?: string; downloadUrl?: string;
+  permissions: Record<Role, Permission>;
+};
+type AuditEvent = {
+  id: string; action: string; documentName: string; user: string; time: string;
+  detail?: string;
+};
+
+const roles: Role[] = ["Admin", "Compliance Officer", "Advisor", "Auditor"];
+const defaultPermissions: Record<Role, Permission> = {
+  Admin: { view: true, edit: true, share: true },
+  "Compliance Officer": { view: true, edit: true, share: false },
+  Advisor: { view: true, edit: false, share: false },
+  Auditor: { view: true, edit: false, share: false },
+};
+const initialDocuments: DocumentItem[] = [
+  { id: "doc-1", name: "Annual Financial Report 2026.pdf", category: "Financial", owner: "Admin", modified: "Oct 24, 2026", size: "2.4 MB", type: "PDF", status: "Approved", sensitivity: "Confidential", content: "Annual Financial Report 2026\n\nExecutive summary\nRevenue increased by 12% compared with the previous fiscal year. Operating costs remained within the approved budget.\n\nCompliance note: Verify all reported revenue figures against the audited ledger before external distribution.\n\nFinancial highlights\nRevenue: $12.8M\nOperating expenses: $7.1M\nNet income: $2.6M\n\nThis document is confidential and intended for authorized workspace members only.", permissions: structuredClone(defaultPermissions) },
+  { id: "doc-2", name: "Company Registration.pdf", category: "Legal", owner: "Sarah Wilson", modified: "Oct 23, 2026", size: "1.2 MB", type: "PDF", status: "Approved", sensitivity: "Restricted", content: "Company Registration\n\nLegal entity: SecureVault Demo Corporation\nRegistration status: Active\n\nCompliance note: Confirm the registration number and legal address against the original certificate before relying on this record.\n\nAccess is restricted to approved legal and compliance personnel.", permissions: structuredClone(defaultPermissions) },
+  { id: "doc-3", name: "Employee Records.xlsx", category: "HR", owner: "John Smith", modified: "Oct 22, 2026", size: "850 KB", type: "XLSX", status: "Pending", sensitivity: "Restricted", content: "Employee Records â€” Preview\n\nEmployee ID | Department | Status\nEMP-001 | Finance | Active\nEMP-002 | Legal | Active\nEMP-003 | Marketing | Active\n\nRestricted sample data. Do not distribute outside authorized HR personnel.", permissions: structuredClone(defaultPermissions) },
+  { id: "doc-4", name: "Investment Proposal.pdf", category: "Financial", owner: "Admin", modified: "Oct 21, 2026", size: "3.1 MB", type: "PDF", status: "Review", sensitivity: "Confidential", content: "Investment Proposal\n\nPurpose\nEvaluate a proposed strategic investment and its projected returns.\n\nFlagged for review: Forecast assumptions are estimates and must not be represented as guaranteed returns.\n\nProjected return: 8â€“11% (illustrative only)\nRisk profile: Moderate to high\n\nInternal review required before sharing.", permissions: structuredClone(defaultPermissions) },
+  { id: "doc-5", name: "Business Agreement.docx", category: "Legal", owner: "Sarah Wilson", modified: "Oct 20, 2026", size: "620 KB", type: "DOCX", status: "Approved", sensitivity: "Internal Only", content: "Business Agreement â€” Preview\n\nThis agreement describes the responsibilities of the participating parties, delivery milestones, and confidentiality obligations.\n\nCompliance note: Legal review is recommended before signing any amended version.", permissions: structuredClone(defaultPermissions) },
+  { id: "doc-6", name: "Product Overview.pdf", category: "Marketing", owner: "David Brown", modified: "Oct 19, 2026", size: "4.5 MB", type: "PDF", status: "Pending", sensitivity: "Public", content: "Product Overview\n\nSecureVault helps teams organize, review, and govern business documents in a single workspace.\n\nThis sample document is marked Public. Check final approved copy before publishing.", permissions: structuredClone(defaultPermissions) },
+  { id: "doc-7", name: "Company Logo.png", category: "Marketing", owner: "David Brown", modified: "Oct 18, 2026", size: "320 KB", type: "PNG", status: "Approved", sensitivity: "Public", content: "Image preview placeholder\n\nCompany Logo.png\nA real image preview is available for image files uploaded during this browser session.", permissions: structuredClone(defaultPermissions) },
+  { id: "doc-8", name: "Due Diligence Notes.md", category: "Financial", owner: "Admin", modified: "Oct 17, 2026", size: "14 KB", type: "MD", status: "Review", sensitivity: "Confidential", content: "# Due Diligence Notes\n\n- Review the latest statements.\n- Confirm all open liabilities.\n\n> Compliance note: Outstanding liabilities require follow-up before final approval.", permissions: structuredClone(defaultPermissions) },
+];
+
+const starterFolders = [
+  { name: "Financial", description: "Financial reports and statements", icon: FileSpreadsheet, color: "bg-blue-50 text-blue-700" },
+  { name: "Legal", description: "Contracts and legal documents", icon: ShieldCheck, color: "bg-violet-50 text-violet-700" },
+  { name: "HR", description: "Employee and HR records", icon: Users, color: "bg-emerald-50 text-emerald-700" },
+  { name: "Marketing", description: "Marketing and business materials", icon: FileImage, color: "bg-orange-50 text-orange-700" },
+];
+const navigation = [
+  { name: "Dashboard", icon: LayoutDashboard },
+  { name: "Documents", icon: FileText },
+  { name: "AI Chat", icon: MessageSquareText },
+  { name: "Admin Panel", icon: Users },
+  { name: "Visual Tree Editor", icon: Network },
+  { name: "Folders", icon: Folder },
+  { name: "Team Members", icon: Users },
+  { name: "Activity Logs", icon: Activity },
+  { name: "Security & Access", icon: LockKeyhole },
+  { name: "Settings", icon: Settings },
+];
+
+function formatSize(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+}
+function fileType(name: string) {
+  const ext = name.split(".").pop() || "FILE";
+  return ext.toUpperCase();
+}
+function iconFor(type: string) {
+  const common = "h-5 w-5";
+  if (["XLS", "XLSX", "CSV"].includes(type)) return <FileSpreadsheet className={`${common} text-emerald-600`} />;
+  if (["PNG", "JPG", "JPEG", "GIF", "WEBP", "SVG"].includes(type)) return <FileImage className={`${common} text-violet-600`} />;
+  if (["JSON"].includes(type)) return <FileJson className={`${common} text-amber-600`} />;
+  if (["TXT", "MD", "DOC", "DOCX"].includes(type)) return <FileText className={`${common} text-blue-600`} />;
+  return <File className={`${common} text-rose-600`} />;
+}
+function sensitivityClass(value: Sensitivity) {
+  switch (value) {
+    case "Confidential": return "bg-amber-50 text-amber-800 ring-amber-200";
+    case "Public": return "bg-emerald-50 text-emerald-800 ring-emerald-200";
+    case "Internal Only": return "bg-blue-50 text-blue-800 ring-blue-200";
+    case "Restricted": return "bg-rose-50 text-rose-800 ring-rose-200";
+  }
+}
+function statusClass(value: DocumentItem["status"]) {
+  if (value === "Approved") return "bg-emerald-50 text-emerald-700";
+  if (value === "Pending") return "bg-amber-50 text-amber-700";
+  return "bg-blue-50 text-blue-700";
+}
+function nowLabel() {
+  return new Date().toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+export default function Home() {
+  const [activePage, setActivePage] = useState("Dashboard");
+  const [documents, setDocuments] = useState<DocumentItem[]>(initialDocuments);
+  const [documentsLoaded, setDocumentsLoaded] = useState(false);
+  const [customFolders, setCustomFolders] = useState<string[]>([]);
+  useEffect(() => {
+  let cancelled = false;
+  let restoredUrls: string[] = [];
+
+  async function restoreDocuments() {
+    try {
+      const savedUploads = await loadUploads();
+
+      if (cancelled) return;
+
+      const restoredDocuments: DocumentItem[] = savedUploads.map(
+        ({ document, blob }) => {
+          const url = URL.createObjectURL(blob);
+          restoredUrls.push(url);
+
+          return {
+            ...(document as unknown as DocumentItem),
+            downloadUrl: url,
+          };
+        },
+      );
+
+      setDocuments((current) => [
+        ...restoredDocuments,
+        ...current.filter((doc) => !doc.id.startsWith("upload-")),
+      ]);
+    } catch (error) {
+      console.error("Could not restore uploaded documents:", error);
+
+      if (!cancelled) {
+        showNotice(
+          "Saved documents could not be loaded. Check browser storage and try again.",
+        );
+      }
+    } finally {
+      if (!cancelled) {
+        setDocumentsLoaded(true);
+      }
+    }
+  }
+
+  void restoreDocuments();
+
+  return () => {
+    cancelled = true;
+    restoredUrls.forEach((url) => URL.revokeObjectURL(url));
+  };
+}, []);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [foldersLoaded, setFoldersLoaded] = useState(false);
+  const [search, setSearch] = useState("");
+  const [categoryFilter, setCategoryFilter] = useState("All");
+  const [statusFilter, setStatusFilter] = useState("All");
+  const [sensitivityFilter, setSensitivityFilter] = useState("All");
+  const [sortBy, setSortBy] = useState("name");
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
+  const [viewMode, setViewMode] = useState<"list" | "grid">("list");
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [previewDoc, setPreviewDoc] = useState<DocumentItem | null>(null);
+  const [showPermissions, setShowPermissions] = useState(false);
+  const [permissionDoc, setPermissionDoc] = useState<DocumentItem | null>(null);
+  const [showAudit, setShowAudit] = useState(false);
+  const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([
+    { id: "a1", action: "Uploaded", documentName: "Annual Financial Report 2026.pdf", user: "Admin", time: "Today, 09:42 AM", detail: "Added to Financial" },
+    { id: "a2", action: "Viewed", documentName: "Company Registration.pdf", user: "Sarah Wilson", time: "Today, 09:18 AM" },
+    { id: "a3", action: "Flagged", documentName: "Investment Proposal.pdf", user: "Compliance Officer", time: "Yesterday, 04:25 PM", detail: "Forecast assumptions require review" },
+    { id: "a4", action: "Permission Changed", documentName: "Employee Records.xlsx", user: "Admin", time: "Yesterday, 02:10 PM" },
+  ]);
+  const [showNewFolder, setShowNewFolder] = useState(false);
+  const [newFolderName, setNewFolderName] = useState("");
+  const [folderError, setFolderError] = useState("");
+  const [showUpload, setShowUpload] = useState(false);
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [uploadFolder, setUploadFolder] = useState("Financial");
+  const [uploadSensitivity, setUploadSensitivity] = useState<Sensitivity>("Confidential");
+  const [uploadError, setUploadError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [mobileMenu, setMobileMenu] = useState(false);
+  const [darkMode, setDarkMode] = useState(false);
+  const [dragging, setDragging] = useState(false);
+  const [renameDoc, setRenameDoc] = useState<DocumentItem | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  // Load saved custom folders when the page opens.
+useEffect(() => {
+  try {
+    const savedFolders = localStorage.getItem("vdr-custom-folders");
+
+    if (savedFolders) {
+      const parsed: unknown = JSON.parse(savedFolders);
+
+      if (
+        Array.isArray(parsed) &&
+        parsed.every(
+          (folder): folder is string => typeof folder === "string"
+        )
+      ) {
+        setCustomFolders(parsed);
+      }
+    }
+  } catch (error) {
+    console.error("Could not load saved folders:", error);
+  } finally {
+    setFoldersLoaded(true);
+  }
+}, []);
+
+// Save custom folders whenever they change.
+useEffect(() => {
+  if (!foldersLoaded) return;
+
+  try {
+    localStorage.setItem(
+      "vdr-custom-folders",
+      JSON.stringify(customFolders)
+    );
+  } catch (error) {
+    console.error("Could not save folders:", error);
+    showNotice("Unable to save folders in this browser.");
+  }
+}, [customFolders, foldersLoaded]);
+
+  const categories = useMemo(() => [...starterFolders.map((f) => f.name), ...customFolders], [customFolders]);
+  const filteredDocuments = useMemo(() => {
+    const term = search.trim().toLowerCase();
+    const items = documents.filter((doc) => {
+      const searchable = `${doc.name} ${doc.category} ${doc.owner} ${doc.status} ${doc.type} ${doc.sensitivity}`.toLowerCase();
+      return (!term || searchable.includes(term)) &&
+        (categoryFilter === "All" || doc.category === categoryFilter) &&
+        (statusFilter === "All" || doc.status === statusFilter) &&
+        (sensitivityFilter === "All" || doc.sensitivity === sensitivityFilter);
+    });
+    items.sort((a, b) => {
+      let compare = 0;
+      if (sortBy === "name") {
+        compare = a.name.localeCompare(b.name);
+      } else if (sortBy === "date") {
+        compare = new Date(a.modified).getTime() - new Date(b.modified).getTime();
+      } else if (sortBy === "type") {
+        compare = a.type.localeCompare(b.type);
+      } else if (sortBy === "sensitivity") {
+        compare = a.sensitivity.localeCompare(b.sensitivity);
+      }
+      return sortDirection === "asc" ? compare : -compare;
+    });
+    return items;
+  }, [documents, search, categoryFilter, statusFilter, sensitivityFilter, sortBy, sortDirection]);
+
+  const addAudit = (action: string, doc: DocumentItem | string, detail?: string) => {
+    const name = typeof doc === "string" ? doc : doc.name;
+    setAuditEvents((prev) => [{ id: `audit-${Date.now()}-${Math.random()}`, action, documentName: name, user: "Admin", time: nowLabel(), detail }, ...prev]);
+  };
+  const showNotice = (message: string) => {
+    setNotice(message);
+    window.setTimeout(() => setNotice(""), 4500);
+  };
+  const navigate = (page: string) => {
+    const moduleRoutes: Record<string, string> = {
+      "AI Chat": "/ai-chat",
+      "Admin Panel": "/admin",
+      "Visual Tree Editor": "/tree-editor",
+    };
+
+    if (moduleRoutes[page]) {
+      window.location.href = moduleRoutes[page];
+      return;
+    }
+    if (page === "AI Chat") { window.location.href = "/ai-chat"; return; }
+    setActivePage(page);
+    setMobileMenu(false);
+    if (["Dashboard", "Documents", "Folders"].includes(page)) {
+      setCategoryFilter("All"); setStatusFilter("All"); setSensitivityFilter("All"); setSearch("");
+    }
+  };
+  const openFolder = (name: string) => {
+    setCategoryFilter(name); setStatusFilter("All"); setSensitivityFilter("All"); setSearch(""); setActivePage("Documents");
+  };
+  const createFolder = () => {
+    const name = newFolderName.trim();
+    if (!name) { setFolderError("Enter a folder name."); return; }
+    if (categories.some((folder) => folder.toLowerCase() === name.toLowerCase())) { setFolderError("That folder already exists."); return; }
+    setCustomFolders((prev) => [...prev, name]);
+    setNewFolderName(""); setFolderError(""); setShowNewFolder(false);
+    showNotice(`Folder "${name}" created.`);
+  };
+  const openUpload = () => {
+    setSelectedFiles([]); setUploadError("");
+    setUploadFolder(categoryFilter !== "All" ? categoryFilter : (categories[0] || "Financial"));
+    setShowUpload(true);
+  };
+  const addFiles = (files: FileList | File[]) => {
+    const accepted = Array.from(files);
+    if (accepted.length) { setSelectedFiles((prev) => [...prev, ...accepted.filter((f) => !prev.some((p) => p.name === f.name && p.size === f.size))]); setUploadError(""); }
+  };
+  const uploadFiles = async () => {
+    if (!selectedFiles.length) { setUploadError("Choose at least one file first."); return; }
+    if (!documentsLoaded) {
+  setUploadError("Please wait until saved documents finish loading.");
+  return;
+}
+    const created: DocumentItem[] = [];
+    for (const file of selectedFiles) {
+      if (documents.some((d) => d.category === uploadFolder && d.name.toLowerCase() === file.name.toLowerCase())) {
+        setUploadError(`"${file.name}" already exists in ${uploadFolder}. Remove it from the selection or choose another folder.`);
+        return;
+      }
+      const url = URL.createObjectURL(file);
+      const type = fileType(file.name);
+      let content: string | undefined;
+      if (["TXT", "MD", "JSON", "CSV"].includes(type)) {
+        if (file.size <= 1024 * 1024) {
+          try { content = await file.text(); }
+          catch { content = "Unable to read this text file in the browser."; }
+        } else {
+          content = "This text file is larger than the 1 MB preview limit. Download it to inspect the full contents.";
+        }
+      }
+      const doc: DocumentItem = {
+        id: `upload-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+        name: file.name, category: uploadFolder, owner: "Admin",
+        modified: new Date().toLocaleDateString("en-US", { month: "short", day: "2-digit", year: "numeric" }),
+        size: formatSize(file.size), type, status: "Pending",
+        sensitivity: uploadSensitivity, downloadUrl: url, content,
+        permissions: structuredClone(defaultPermissions),
+      };
+const savedDocument = { ...doc };
+delete savedDocument.downloadUrl;
+
+try {
+  await saveUpload(
+    doc.id,
+    savedDocument as unknown as Record<string, unknown>,
+    file,
+  );
+  created.push(doc);
+} catch (error) {
+  URL.revokeObjectURL(url);
+  console.error("Could not save uploaded document:", error);
+  setUploadError(`Could not save "${file.name}" to browser storage.`);
+  return;
+}
+    }
+    setDocuments((prev) => [...created, ...prev]);
+    created.forEach((doc) => addAudit("Uploaded", doc, `Added to ${doc.category}`));
+    setCategoryFilter(uploadFolder); setStatusFilter("All"); setSensitivityFilter("All"); setSearch(""); setActivePage("Documents");
+    setSelectedFiles([]); setShowUpload(false);
+   showNotice(
+  `${created.length} file${created.length === 1 ? "" : "s"} saved to browser storage in ${uploadFolder}.`,
+);
+};
+
+const openPreview = (doc: DocumentItem) => {
+  setPreviewDoc(doc);
+  addAudit("Viewed", doc);
+};
+  const deleteDocument = (doc: DocumentItem) => {
+    if (!window.confirm(`Remove "${doc.name}" from this demo workspace?`)) return;
+    if (doc.downloadUrl) URL.revokeObjectURL(doc.downloadUrl);
+    void deleteUpload(doc.id).catch((error) => {
+  console.error("Could not delete saved document:", error);
+  showNotice("The document was removed from the view, but storage cleanup failed.");
+});
+    setDocuments((prev) => prev.filter((item) => item.id !== doc.id));
+    setSelectedIds((prev) => prev.filter((id) => id !== doc.id));
+    if (previewDoc?.id === doc.id) setPreviewDoc(null);
+    addAudit("Deleted", doc);
+    showNotice(`"${doc.name}" removed from the demo list.`);
+  };
+  const deleteSelected = () => {
+    if (!selectedIds.length) return;
+    if (!window.confirm(`Remove ${selectedIds.length} selected document(s)?`)) return;
+    const selected = documents.filter((d) => selectedIds.includes(d.id));
+selected.forEach((d) => {
+  if (d.downloadUrl) URL.revokeObjectURL(d.downloadUrl);
+
+  void deleteUpload(d.id).catch((error) => {
+    console.error("Could not delete saved document:", error);
+    showNotice(`Storage cleanup failed for "${d.name}".`);
+  });
+
+  addAudit("Deleted", d);
+});
+
+    setDocuments((prev) => prev.filter((d) => !selectedIds.includes(d.id)));
+    setSelectedIds([]); setPreviewDoc(null); showNotice(`${selected.length} document(s) removed.`);
+  };
+  const saveRename = () => {
+    const name = renameValue.trim();
+    if (!renameDoc || !name) return;
+    if (documents.some((d) => d.id !== renameDoc.id && d.category === renameDoc.category && d.name.toLowerCase() === name.toLowerCase())) {
+      showNotice("A file with that name already exists in this folder."); return;
+    }
+    const updated = { ...renameDoc, name, type: fileType(name), modified: new Date().toLocaleDateString("en-US", { month: "short", day: "2-digit", year: "numeric" }) };
+    setDocuments((prev) => prev.map((d) => d.id === renameDoc.id ? updated : d));
+    if (previewDoc?.id === renameDoc.id) setPreviewDoc(updated);
+    addAudit("Renamed", updated, `Previous name: ${renameDoc.name}`);
+    setRenameDoc(null); setRenameValue(""); showNotice("Document renamed.");
+  };
+  const savePermissions = () => {
+    if (!permissionDoc) return;
+    const updated = { ...permissionDoc };
+    const { downloadUrl: _temporaryUrl, ...savedDocument } = updated;
+
+void updateUploadMetadata(
+  updated.id,
+  savedDocument as unknown as Record<string, unknown>,
+).catch((error) => {
+  console.error("Could not save document metadata:", error);
+  showNotice("The permission changes could not be saved to browser storage.");
+});
+    setDocuments((prev) => prev.map((d) => d.id === updated.id ? updated : d));
+    if (previewDoc?.id === updated.id) setPreviewDoc(updated);
+    addAudit("Permission Changed", updated, "Demo role permissions updated");
+    setShowPermissions(false); setPermissionDoc(null); showNotice("Permission settings updated in the demo UI.");
+  };
+  const clearFilters = () => { setSearch(""); setCategoryFilter("All"); setStatusFilter("All"); setSensitivityFilter("All"); };
+  const isDocumentPage = ["Dashboard", "Documents"].includes(activePage);
+  const isFolderPage = ["Dashboard", "Folders"].includes(activePage);
+  const pageBg = darkMode ? "bg-slate-950 text-slate-100" : "bg-slate-50 text-slate-900";
+  const card = darkMode ? "border-slate-800 bg-slate-900" : "border-slate-200 bg-white";
+  const muted = darkMode ? "text-slate-400" : "text-slate-500";
+  const inputClass = `w-full rounded-xl border px-3 py-2.5 text-sm outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100 ${darkMode ? "border-slate-700 bg-slate-950 text-slate-100" : "border-slate-200 bg-white text-slate-900"}`;
+
+  return (
+    <main className={`min-h-screen transition-colors duration-200 ${pageBg}`}>
+      {mobileMenu && <button aria-label="Close navigation" onClick={() => setMobileMenu(false)} className="fixed inset-0 z-40 bg-black/40 lg:hidden" />}
+      <aside className={`fixed inset-y-0 left-0 z-50 flex w-64 flex-col border-r transition-transform duration-200 ${darkMode ? "border-slate-800 bg-slate-900" : "border-slate-200 bg-white"} ${mobileMenu ? "translate-x-0" : "-translate-x-full"} lg:translate-x-0`}>
+        <div className={`flex h-20 items-center gap-3 border-b px-5 ${darkMode ? "border-slate-800" : "border-slate-100"}`}>
+          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-600 text-white"><ShieldCheck className="h-6 w-6" /></div>
+          <div><h1 className="font-bold">SecureVault</h1><p className={`text-xs ${muted}`}>Virtual Data Room</p></div>
+          <button aria-label="Close menu" onClick={() => setMobileMenu(false)} className="ml-auto rounded-lg p-2 hover:bg-slate-100 lg:hidden"><X className="h-5 w-5" /></button>
+        </div>
+        <div className="px-4 py-5">
+          <p className={`mb-3 px-3 text-xs font-semibold uppercase tracking-wider ${muted}`}>Workspace</p>
+          <nav className="space-y-1">
+            {navigation.map((item) => { const Icon = item.icon; return (
+              <button key={item.name} onClick={() => navigate(item.name)} className={`flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-sm font-medium transition ${activePage === item.name ? "bg-blue-600 text-white shadow-sm" : `${muted} hover:bg-slate-100 hover:text-slate-900`}`}>
+                <Icon className="h-5 w-5" /><span>{item.name}</span>
+                {item.name === "Documents" && <span className={`ml-auto rounded-md px-2 py-0.5 text-xs ${activePage === item.name ? "bg-white/20" : "bg-slate-100 text-slate-700"}`}>{documents.length}</span>}
+              </button>
+            ); })}
+          </nav>
+        </div>
+        <div className={`mt-auto border-t p-4 ${darkMode ? "border-slate-800" : "border-slate-100"}`}>
+          <div className={`rounded-xl p-4 ${darkMode ? "bg-slate-800" : "bg-slate-50"}`}>
+            <div className="mb-2 flex items-center gap-2"><HardDrive className="h-5 w-5 text-blue-600" /><span className="text-sm font-semibold">Workspace usage</span></div>
+            <div className="mb-2 h-2 overflow-hidden rounded-full bg-slate-200"><div className="h-full w-[35%] rounded-full bg-blue-600" /></div>
+            <p className={`text-xs ${muted}`}>Illustrative demo indicator</p>
+          </div>
+          <p className={`mt-4 px-3 text-xs ${muted}`}>FE-1 Â· Frontend prototype</p>
+        </div>
+      </aside>
+
+      <div className="min-h-screen lg:ml-64">
+        <header className={`sticky top-0 z-30 border-b backdrop-blur ${darkMode ? "border-slate-800 bg-slate-950/90" : "border-slate-200 bg-white/95"}`}>
+          <div className="flex min-h-20 flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-6 lg:px-8">
+            <div className="flex min-w-0 items-center gap-3">
+              <button onClick={() => setMobileMenu(true)} className="rounded-lg p-2 hover:bg-slate-100 lg:hidden" aria-label="Open menu"><Menu className="h-5 w-5" /></button>
+              <div><h2 className="text-xl font-bold">{activePage}</h2><p className={`hidden text-sm sm:block ${muted}`}>Secure document workspace Â· Demo mode</p></div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {filteredDocuments.length > 0 && <button onClick={() => {
+                const visibleIds = filteredDocuments.map((doc) => doc.id);
+                const allVisibleSelected = visibleIds.every((id) => selectedIds.includes(id));
+                setSelectedIds((prev) => allVisibleSelected ? prev.filter((id) => !visibleIds.includes(id)) : [...new Set([...prev, ...visibleIds])]);
+              }} className={`rounded-lg border px-3 py-2 text-sm font-medium ${darkMode ? "border-slate-700 hover:bg-slate-800" : "border-slate-200 hover:bg-slate-50"}`}>
+                {filteredDocuments.every((doc) => selectedIds.includes(doc.id)) ? "Deselect visible" : "Select visible"}
+              </button>}
+              {selectedIds.length > 0 && <>
+                <button onClick={deleteSelected} className="inline-flex items-center gap-1.5 rounded-lg border border-rose-200 px-3 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-50"><Trash2 className="h-4 w-4" />Delete selected ({selectedIds.length})</button>
+                <button onClick={() => setSelectedIds([])} className={`rounded-lg px-2 py-2 text-sm ${muted} hover:text-blue-600`}>Clear selection</button>
+              </>}
+              <button title="List view" onClick={() => setViewMode("list")} className={`rounded-lg border p-2 ${viewMode === "list" ? "border-blue-300 bg-blue-50 text-blue-700" : "border-slate-200"}`}><List className="h-4 w-4" /></button>
+              <button title="Grid view" onClick={() => setViewMode("grid")} className={`rounded-lg border p-2 ${viewMode === "grid" ? "border-blue-300 bg-blue-50 text-blue-700" : "border-slate-200"}`}><Grid2X2 className="h-4 w-4" /></button>
+              <button onClick={clearFilters} className={`rounded-lg px-2 py-2 text-sm ${muted} hover:text-blue-600`}>Clear filters</button>
+            </div>
+          </div>
+          <div className="px-4 pb-3 md:hidden"><div className="relative"><Search className={`absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 ${muted}`} /><input value={search} onChange={(e) => { setSearch(e.target.value); setActivePage("Documents"); }} placeholder="Search documents..." className={`w-full rounded-xl border py-2.5 pl-9 pr-3 text-sm outline-none ${darkMode ? "border-slate-700 bg-slate-900" : "border-slate-200 bg-slate-50"}`} /></div></div>
+        </header>
+
+        <div className="p-4 sm:p-6 lg:p-8">
+          {notice && <div className="mb-5 flex items-center justify-between gap-3 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800"><span className="flex items-center gap-2"><CheckCircle2 className="h-4 w-4 shrink-0" />{notice}</span><button onClick={() => setNotice("")} aria-label="Dismiss notice"><X className="h-4 w-4" /></button></div>}
+
+          {activePage === "Dashboard" && <>
+            <div className="mb-7 flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
+              <div><p className={`mb-1 text-sm font-medium ${muted}`}>WORKSPACE OVERVIEW</p><h3 className="text-2xl font-bold">Welcome back, Admin</h3><p className={`mt-1 text-sm ${muted}`}>Review, organize, and govern confidential documents.</p></div>
+              <div className="flex flex-wrap gap-2"><button onClick={openUpload} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"><Upload className="h-4 w-4" />Upload files</button><button onClick={() => setShowNewFolder(true)} className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700"><Plus className="h-4 w-4" />New folder</button></div>
+            </div>
+            <section className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+              <StatCard icon={<FileText className="h-5 w-5" />} label="Total documents" value={documents.length} tone="blue" />
+              <StatCard icon={<FolderOpen className="h-5 w-5" />} label="Folders" value={categories.length} tone="violet" />
+              <StatCard icon={<Shield className="h-5 w-5" />} label="Restricted files" value={documents.filter((d) => d.sensitivity === "Restricted").length} tone="rose" />
+              <StatCard icon={<AlertTriangle className="h-5 w-5" />} label="Need review" value={documents.filter((d) => d.status === "Pending" || d.status === "Review").length} tone="amber" />
+            </section>
+          </>}
+
+          {isFolderPage && <section className="mb-8">
+            <div className="mb-4 flex flex-wrap items-end justify-between gap-3"><div><h3 className="text-lg font-bold">{activePage === "Folders" ? "Folder explorer" : "Your folders"}</h3><p className={`mt-1 text-sm ${muted}`}>Choose a folder to filter its documents.</p></div><button onClick={() => setShowNewFolder(true)} className={`inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-sm font-semibold ${darkMode ? "border-slate-700 hover:bg-slate-800" : "border-slate-200 bg-white hover:bg-slate-50"}`}><Plus className="h-4 w-4" />Create folder</button></div>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+              {categories.map((name) => { const starter = starterFolders.find((f) => f.name === name); const Icon = starter?.icon || FolderOpen; const count = documents.filter((d) => d.category === name).length; return <button key={name} onClick={() => openFolder(name)} className={`group rounded-2xl border p-5 text-left shadow-sm transition duration-200 hover:-translate-y-0.5 hover:border-blue-300 hover:shadow-md ${card}`}><div className="mb-4 flex items-center justify-between"><span className={`rounded-xl p-3 ${starter?.color || "bg-blue-50 text-blue-700"}`}><Icon className="h-6 w-6" /></span><ChevronRight className={`h-4 w-4 transition group-hover:translate-x-1 ${muted}`} /></div><h4 className="font-semibold">{name}</h4><p className={`mt-1 text-sm ${muted}`}>{starter?.description || "Custom workspace folder"}</p><div className={`mt-4 border-t pt-3 text-xs ${muted} ${darkMode ? "border-slate-800" : "border-slate-100"}`}>{count} document{count === 1 ? "" : "s"}</div></button>; })}
+            </div>
+          </section>}
+
+          {isDocumentPage && <section className={`overflow-hidden rounded-2xl border shadow-sm ${card}`}>
+            <div className={`flex flex-col gap-4 border-b p-4 sm:p-5 ${darkMode ? "border-slate-800" : "border-slate-100"}`}>
+              <div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="text-lg font-bold">{activePage === "Dashboard" ? "Recent documents" : "File explorer"}</h3><p className={`mt-1 text-sm ${muted}`}>Search, preview, tag, and manage workspace files.</p></div><div className="flex flex-wrap gap-2"><button onClick={() => setShowAudit(true)} className={`inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-sm font-medium ${darkMode ? "border-slate-700 hover:bg-slate-800" : "border-slate-200 hover:bg-slate-50"}`}><History className="h-4 w-4" />Audit log</button><button onClick={openUpload} className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-3 py-2 text-sm font-semibold text-white hover:bg-blue-700"><Upload className="h-4 w-4" />Upload</button></div></div>
+              <nav aria-label="Breadcrumb" className={`flex flex-wrap items-center gap-1 text-sm ${muted}`}>
+                <button onClick={() => { setCategoryFilter("All"); setActivePage("Documents"); }} className="font-medium transition hover:text-blue-600">Data Room</button>
+                <ChevronRight className="h-4 w-4" aria-hidden="true" />
+                {categoryFilter === "All" ? (
+                  <span aria-current="page" className="font-semibold text-blue-600">All documents</span>
+                ) : (
+                  <>
+                    <button onClick={() => setCategoryFilter("All")} className="transition hover:text-blue-600">All documents</button>
+                    <ChevronRight className="h-4 w-4" aria-hidden="true" />
+                    <span aria-current="page" className="font-semibold text-blue-600">{categoryFilter}</span>
+                  </>
+                )}
+              </nav>
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-5">
+                <select aria-label="Filter by folder" value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)} className={inputClass}><option value="All">All folders</option>{categories.map((c) => <option key={c}>{c}</option>)}</select>
+                <select aria-label="Filter by status" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className={inputClass}><option value="All">All statuses</option><option>Approved</option><option>Pending</option><option>Review</option></select>
+                <select aria-label="Filter by sensitivity" value={sensitivityFilter} onChange={(e) => setSensitivityFilter(e.target.value)} className={inputClass}><option value="All">All sensitivity tags</option><option>Confidential</option><option>Public</option><option>Internal Only</option><option>Restricted</option></select>
+                <select aria-label="Sort documents" value={sortBy} onChange={(e) => setSortBy(e.target.value)} className={inputClass}><option value="name">Sort: Name</option><option value="date">Sort: Date</option><option value="type">Sort: Type</option><option value="sensitivity">Sort: Sensitivity</option></select>
+                <button onClick={() => setSortDirection((d) => d === "asc" ? "desc" : "asc")} className={`inline-flex items-center justify-center gap-2 rounded-xl border px-3 py-2 text-sm font-medium ${darkMode ? "border-slate-700 hover:bg-slate-800" : "border-slate-200 hover:bg-slate-50"}`}><ArrowUpDown className="h-4 w-4" />{sortDirection === "asc" ? "Ascending" : "Descending"}</button>
+              </div>
+              <div className="flex flex-wrap items-center justify-between gap-3"><p className={`text-sm ${muted}`}><span className="font-semibold">{filteredDocuments.length}</span> of {documents.length} documents</p><div className="flex flex-wrap items-center gap-2">{filteredDocuments.length > 0 && <button onClick={() => { const visibleIds = filteredDocuments.map((doc) => doc.id); const allVisibleSelected = visibleIds.every((id) => selectedIds.includes(id)); setSelectedIds((prev) => allVisibleSelected ? prev.filter((id) => !visibleIds.includes(id)) : [...new Set([...prev, ...visibleIds])]); }} className={`rounded-lg border px-3 py-2 text-sm font-medium ${darkMode ? "border-slate-700 hover:bg-slate-800" : "border-slate-200 hover:bg-slate-50"}`}>{filteredDocuments.every((doc) => selectedIds.includes(doc.id)) ? "Deselect visible" : "Select visible"}</button>}{selectedIds.length > 0 && <><button onClick={deleteSelected} className="inline-flex items-center gap-1.5 rounded-lg border border-rose-200 px-3 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-50"><Trash2 className="h-4 w-4" />Delete selected ({selectedIds.length})</button><button onClick={() => setSelectedIds([])} className={`rounded-lg px-2 py-2 text-sm ${muted} hover:text-blue-600`}>Clear selection</button></>}<button title="List view" onClick={() => setViewMode("list")} className={`rounded-lg border p-2 ${viewMode === "list" ? "border-blue-300 bg-blue-50 text-blue-700" : "border-slate-200"}`}><List className="h-4 w-4" /></button><button title="Grid view" onClick={() => setViewMode("grid")} className={`rounded-lg border p-2 ${viewMode === "grid" ? "border-blue-300 bg-blue-50 text-blue-700" : "border-slate-200"}`}><Grid2X2 className="h-4 w-4" /></button><button onClick={clearFilters} className={`rounded-lg px-2 py-2 text-sm ${muted} hover:text-blue-600`}>Clear filters</button></div></div>
+            </div>
+            {filteredDocuments.length === 0 ? <div className="px-6 py-16 text-center"><FolderOpen className={`mx-auto mb-3 h-10 w-10 ${muted}`} /><h4 className="font-semibold">No documents found</h4><p className={`mt-1 text-sm ${muted}`}>Try changing your search or filters, or upload a file.</p><button onClick={clearFilters} className="mt-4 rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white">Clear filters</button></div> :
+              viewMode === "list" ? <div className="overflow-x-auto"><table className="w-full min-w-[900px] text-left text-sm"><thead className={darkMode ? "bg-slate-800/70 text-slate-300" : "bg-slate-50 text-slate-500"}><tr><th className="w-10 px-4 py-3"><input type="checkbox" aria-label="Select all visible documents" checked={filteredDocuments.length > 0 && filteredDocuments.every((d) => selectedIds.includes(d.id))} onChange={(e) => setSelectedIds(e.target.checked ? [...new Set([...selectedIds, ...filteredDocuments.map((d) => d.id)])] : selectedIds.filter((id) => !filteredDocuments.some((d) => d.id === id)))} /></th><th className="px-4 py-3 font-semibold">Document</th><th className="px-4 py-3 font-semibold">Folder</th><th className="px-4 py-3 font-semibold">Sensitivity</th><th className="px-4 py-3 font-semibold">Status</th><th className="px-4 py-3 font-semibold">Modified</th><th className="px-4 py-3 font-semibold">Actions</th></tr></thead><tbody>{filteredDocuments.map((doc) => <tr key={doc.id} className={`border-t transition ${darkMode ? "border-slate-800 hover:bg-slate-800/50" : "border-slate-100 hover:bg-blue-50/30"}`}><td className="px-4 py-4"><input type="checkbox" aria-label={`Select ${doc.name}`} checked={selectedIds.includes(doc.id)} onChange={(e) => setSelectedIds((prev) => e.target.checked ? [...prev, doc.id] : prev.filter((id) => id !== doc.id))} /></td><td className="px-4 py-4"><button onClick={() => openPreview(doc)} className="flex items-center gap-3 text-left"><span className={`rounded-lg p-2 ${darkMode ? "bg-slate-800" : "bg-slate-50"}`}>{iconFor(doc.type)}</span><span><span className="block max-w-[280px] truncate font-semibold hover:text-blue-600">{doc.name}</span><span className={`mt-1 block text-xs ${muted}`}>{doc.type} Â· {doc.size} Â· {doc.owner}</span></span></button></td><td className={`px-4 py-4 ${muted}`}>{doc.category}</td><td className="px-4 py-4"><span className={`whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ring-inset ${sensitivityClass(doc.sensitivity)}`}>{doc.sensitivity}</span></td><td className="px-4 py-4"><span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${statusClass(doc.status)}`}>{doc.status}</span></td><td className={`whitespace-nowrap px-4 py-4 ${muted}`}>{doc.modified}</td><td className="px-4 py-4"><div className="flex items-center gap-1"><button title="Preview" onClick={() => openPreview(doc)} className="rounded-lg p-2 hover:bg-blue-50 hover:text-blue-700"><Eye className="h-4 w-4" /></button><button title="Permissions" onClick={() => { setPermissionDoc(structuredClone(doc)); setShowPermissions(true); }} className="rounded-lg p-2 hover:bg-violet-50 hover:text-violet-700"><LockKeyhole className="h-4 w-4" /></button><button title="Rename" onClick={() => { setRenameDoc(doc); setRenameValue(doc.name); }} className="rounded-lg p-2 hover:bg-amber-50 hover:text-amber-700"><Pencil className="h-4 w-4" /></button><button title="Delete" onClick={() => deleteDocument(doc)} className="rounded-lg p-2 hover:bg-rose-50 hover:text-rose-700"><Trash2 className="h-4 w-4" /></button></div></td></tr>)}</tbody></table></div> :
+              <div className="grid grid-cols-1 gap-3 p-4 sm:grid-cols-2 xl:grid-cols-3">{filteredDocuments.map((doc) => <article key={doc.id} className={`rounded-xl border p-4 transition hover:shadow-md ${card}`}><div className="flex items-start justify-between gap-2"><span className={`rounded-lg p-2 ${darkMode ? "bg-slate-800" : "bg-slate-50"}`}>{iconFor(doc.type)}</span><input type="checkbox" aria-label={`Select ${doc.name}`} checked={selectedIds.includes(doc.id)} onChange={(e) => setSelectedIds((prev) => e.target.checked ? [...prev, doc.id] : prev.filter((id) => id !== doc.id))} /></div><button onClick={() => openPreview(doc)} className="mt-3 break-words text-left font-semibold hover:text-blue-600">{doc.name}</button><p className={`mt-1 text-xs ${muted}`}>{doc.category} Â· {doc.size} Â· {doc.modified}</p><div className="mt-3 flex flex-wrap gap-2"><span className={`rounded-full px-2 py-1 text-xs font-semibold ring-1 ring-inset ${sensitivityClass(doc.sensitivity)}`}>{doc.sensitivity}</span><span className={`rounded-full px-2 py-1 text-xs font-semibold ${statusClass(doc.status)}`}>{doc.status}</span></div><div className={`mt-4 flex gap-1 border-t pt-3 ${darkMode ? "border-slate-800" : "border-slate-100"}`}><button onClick={() => openPreview(doc)} className="flex-1 rounded-lg px-2 py-2 text-sm hover:bg-blue-50 hover:text-blue-700"><Eye className="mr-1 inline h-4 w-4" />Preview</button><button onClick={() => { setPermissionDoc(structuredClone(doc)); setShowPermissions(true); }} className="rounded-lg px-2 py-2 text-sm hover:bg-violet-50 hover:text-violet-700"><LockKeyhole className="inline h-4 w-4" /></button><button onClick={() => deleteDocument(doc)} className="rounded-lg px-2 py-2 text-sm hover:bg-rose-50 hover:text-rose-700"><Trash2 className="inline h-4 w-4" /></button></div></article>)}</div>
+            }
+          </section>}
+
+          {activePage === "Team Members" && <section className={`rounded-2xl border p-6 ${card}`}><h3 className="text-lg font-bold">Workspace members</h3><p className={`mt-1 text-sm ${muted}`}>Demo roles used by the permission editor.</p><div className="mt-5 grid gap-3 sm:grid-cols-2">{roles.map((role, i) => <div key={role} className={`flex items-center gap-3 rounded-xl border p-4 ${darkMode ? "border-slate-800" : "border-slate-100"}`}><div className="flex h-10 w-10 items-center justify-center rounded-full bg-blue-100 font-bold text-blue-700">{role.split(" ").map((w) => w[0]).join("").slice(0, 2)}</div><div><p className="font-semibold">{["Alex Morgan", "Maya Patel", "Daniel Lee", "Olivia Chen"][i]}</p><p className={`text-sm ${muted}`}>{role}</p></div><span className="ml-auto rounded-full bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-700">Active</span></div>)}</div></section>}
+
+          {activePage === "Activity Logs" && <section className={`rounded-2xl border p-5 sm:p-6 ${card}`}><div className="mb-5 flex items-center justify-between"><div><h3 className="text-lg font-bold">Audit activity</h3><p className={`mt-1 text-sm ${muted}`}>Recent events recorded by this frontend session.</p></div><Activity className="h-6 w-6 text-blue-600" /></div><AuditTimeline events={auditEvents} darkMode={darkMode} /></section>}
+
+          {activePage === "Security & Access" && <section className={`rounded-2xl border p-5 sm:p-6 ${card}`}><h3 className="text-lg font-bold">Security & access</h3><p className={`mt-1 text-sm ${muted}`}>Demo controls for sensitivity labels and role permissions.</p><div className="mt-5 grid gap-3 sm:grid-cols-2">{[["Restricted", "Only explicitly authorized roles should access highly sensitive materials."], ["Confidential", "Sensitive business and financial information."], ["Internal Only", "For internal workspace use; not intended for public distribution."], ["Public", "Approved for public sharing after normal review."]].map(([title, desc]) => <div key={title} className={`rounded-xl border p-4 ${darkMode ? "border-slate-800" : "border-slate-100"}`}><span className={`rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ring-inset ${sensitivityClass(title as Sensitivity)}`}>{title}</span><p className={`mt-3 text-sm ${muted}`}>{desc}</p></div>)}</div><div className="mt-5 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"><AlertTriangle className="mr-2 inline h-4 w-4" />This is a frontend prototype. Labels and role permissions update the interface only and do not enforce server-side security.</div></section>}
+
+          {activePage === "Settings" && <section className={`rounded-2xl border p-5 sm:p-6 ${card}`}><h3 className="text-lg font-bold">Workspace settings</h3><p className={`mt-1 text-sm ${muted}`}>Prototype preferences.</p><div className={`mt-5 flex items-center justify-between rounded-xl border p-4 ${darkMode ? "border-slate-800" : "border-slate-100"}`}><div><p className="font-semibold">Appearance</p><p className={`text-sm ${muted}`}>Switch between light and dark theme.</p></div><button onClick={() => setDarkMode((v) => !v)} className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-3 py-2 text-sm font-semibold text-white">{darkMode ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}{darkMode ? "Light mode" : "Dark mode"}</button></div><div className="mt-4 rounded-xl border border-blue-100 bg-blue-50 p-4 text-sm text-blue-900">Files and changes are stored in React state for this browser session. Refreshing the page resets the demo workspace.</div></section>}
+        </div>
+      </div>
+
+      {/* Document preview side panel */}
+      {previewDoc && <div className="fixed inset-0 z-[60] flex justify-end bg-slate-950/40 backdrop-blur-[1px]" onMouseDown={(e) => { if (e.target === e.currentTarget) setPreviewDoc(null); }}><aside className={`flex h-full w-full max-w-2xl flex-col shadow-2xl ${darkMode ? "bg-slate-950 text-slate-100" : "bg-white text-slate-900"}`}><div className={`flex items-start justify-between gap-3 border-b p-5 ${darkMode ? "border-slate-800" : "border-slate-200"}`}><div className="flex min-w-0 items-start gap-3"><span className="rounded-xl bg-blue-50 p-3">{iconFor(previewDoc.type)}</span><div className="min-w-0"><h3 className="break-words font-bold">{previewDoc.name}</h3><p className={`mt-1 text-xs ${muted}`}>{previewDoc.type} Â· {previewDoc.size} Â· {previewDoc.owner}</p><div className="mt-2 flex flex-wrap gap-2"><span className={`rounded-full px-2 py-1 text-xs font-semibold ring-1 ring-inset ${sensitivityClass(previewDoc.sensitivity)}`}>{previewDoc.sensitivity}</span><span className={`rounded-full px-2 py-1 text-xs font-semibold ${statusClass(previewDoc.status)}`}>{previewDoc.status}</span></div></div></div><button onClick={() => setPreviewDoc(null)} aria-label="Close preview" className="rounded-lg p-2 hover:bg-slate-100"><X className="h-5 w-5" /></button></div><div className="flex flex-wrap items-center gap-2 border-b border-slate-100 p-4"><button onClick={() => { setPermissionDoc(structuredClone(previewDoc)); setShowPermissions(true); }} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-sm font-semibold hover:bg-slate-50"><LockKeyhole className="h-4 w-4" />Permissions</button>{previewDoc.downloadUrl && <a href={previewDoc.downloadUrl} download={previewDoc.name} onClick={() => addAudit("Downloaded", previewDoc)} className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-2 text-sm font-semibold hover:bg-slate-50"><Download className="h-4 w-4" />Download</a>}<button onClick={() => { addAudit("Flagged", previewDoc, "Flagged from document preview"); showNotice("Document flagged for compliance review."); }} className="inline-flex items-center gap-2 rounded-xl border border-amber-200 px-3 py-2 text-sm font-semibold text-amber-800 hover:bg-amber-50"><AlertTriangle className="h-4 w-4" />Flag for review</button></div><div className="flex-1 overflow-y-auto p-5 sm:p-7"><div className={`mb-4 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider ${muted}`}><Eye className="h-4 w-4" />Document preview Â· mock renderer</div>{previewDoc.type === "PDF" && previewDoc.downloadUrl ? <iframe src={previewDoc.downloadUrl} title={`PDF preview: ${previewDoc.name}`} className="h-[65vh] min-h-96 w-full rounded-xl border border-slate-200 bg-white" /> : ["PNG", "JPG", "JPEG", "GIF", "WEBP", "SVG"].includes(previewDoc.type) && previewDoc.downloadUrl ? <img src={previewDoc.downloadUrl} alt={previewDoc.name} className="mx-auto max-h-[65vh] max-w-full rounded-xl object-contain shadow" /> : <div className={`min-h-72 rounded-2xl border p-5 sm:p-7 ${darkMode ? "border-slate-800 bg-slate-900" : "border-slate-200 bg-slate-50"}`}><div className="mb-5 flex items-center gap-2"><span className="h-2 w-2 rounded-full bg-rose-400" /><span className="h-2 w-2 rounded-full bg-amber-400" /><span className="h-2 w-2 rounded-full bg-emerald-400" /><span className={`ml-2 text-xs ${muted}`}>{previewDoc.type} preview</span></div>{previewDoc.type === "JSON" ? <pre className="overflow-x-auto whitespace-pre-wrap text-sm">{(() => { try { return JSON.stringify(JSON.parse(previewDoc.content || "{}"), null, 2); } catch { return previewDoc.content || "{\n  \"preview\": \"No JSON content available\"\n}"; } })()}</pre> : <div className="space-y-3 text-sm leading-7">{(previewDoc.content || `Preview is simulated for ${previewDoc.name}.\n\nThis frontend-only prototype does not parse the contents of every uploaded file type. For PDF, DOCX, and spreadsheet files, this area represents the in-app preview experience.`).split("\n").map((line, i) => { const flagged = /compliance note|flagged for review|restricted|do not distribute|must not be represented|outstanding liabilities/i.test(line); return line.trim() ? <p key={i} className={flagged ? "rounded-lg border-l-4 border-amber-400 bg-amber-50 px-3 py-2 font-medium text-amber-950" : ""}>{line}</p> : <div key={i} className="h-1" />; })}</div>}</div>}<div className={`mt-5 rounded-xl border p-4 ${darkMode ? "border-slate-800" : "border-slate-200"}`}><p className="mb-2 text-sm font-semibold">Access summary</p><div className="grid grid-cols-2 gap-3 text-sm"><div><p className={muted}>Folder</p><p className="font-medium">{previewDoc.category}</p></div><div><p className={muted}>Owner</p><p className="font-medium">{previewDoc.owner}</p></div><div><p className={muted}>Last modified</p><p className="font-medium">{previewDoc.modified}</p></div><div><p className={muted}>Roles with view access</p><p className="font-medium">{roles.filter((r) => previewDoc.permissions[r].view).length} of {roles.length}</p></div></div></div></div></aside></div>}
+
+      {/* Permission editor */}
+      {showPermissions && permissionDoc && <Modal title="Access permissions" subtitle={permissionDoc.name} onClose={() => { setShowPermissions(false); setPermissionDoc(null); }} darkMode={darkMode}><div className="space-y-5"><div><label className="mb-2 block text-sm font-semibold">Sensitivity label</label><select value={permissionDoc.sensitivity} onChange={(e) => setPermissionDoc({ ...permissionDoc, sensitivity: e.target.value as Sensitivity })} className={inputClass}><option>Confidential</option><option>Public</option><option>Internal Only</option><option>Restricted</option></select><p className={`mt-2 text-xs ${muted}`}>This label is descriptive in this frontend prototype.</p></div><div><div className="mb-2 grid grid-cols-[1.3fr_repeat(3,0.6fr)] gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500"><span>Role</span><span className="text-center">View</span><span className="text-center">Edit</span><span className="text-center">Share</span></div>{roles.map((role) => <div key={role} className={`grid grid-cols-[1.3fr_repeat(3,0.6fr)] items-center gap-2 border-t py-3 ${darkMode ? "border-slate-800" : "border-slate-100"}`}><span className="text-sm font-medium">{role}</span>{(["view", "edit", "share"] as const).map((perm) => <label key={perm} className="flex justify-center"><input type="checkbox" checked={permissionDoc.permissions[role][perm]} onChange={(e) => setPermissionDoc({ ...permissionDoc, permissions: { ...permissionDoc.permissions, [role]: { ...permissionDoc.permissions[role], [perm]: e.target.checked } } })} aria-label={`${role} ${perm}`} className="h-4 w-4 rounded accent-blue-600" /></label>)}</div>)}</div><div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-900"><AlertTriangle className="mr-1 inline h-4 w-4" />UI demonstration only. Enforce real permissions in a trusted backend before handling confidential files.</div><div className="flex justify-end gap-2"><button onClick={() => { setShowPermissions(false); setPermissionDoc(null); }} className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold">Cancel</button><button onClick={savePermissions} className="rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-700">Save permissions</button></div></div></Modal>}
+
+      {/* Audit drawer */}
+      {showAudit && <div className="fixed inset-0 z-[70] bg-slate-950/40" onMouseDown={(e) => { if (e.target === e.currentTarget) setShowAudit(false); }}><aside className={`ml-auto flex h-full w-full max-w-lg flex-col shadow-2xl ${darkMode ? "bg-slate-950 text-slate-100" : "bg-white text-slate-900"}`}><div className={`flex items-center justify-between border-b p-5 ${darkMode ? "border-slate-800" : "border-slate-200"}`}><div><h3 className="text-lg font-bold">Audit log</h3><p className={`mt-1 text-sm ${muted}`}>Document activity timeline</p></div><button onClick={() => setShowAudit(false)} aria-label="Close audit log" className="rounded-lg p-2 hover:bg-slate-100"><X className="h-5 w-5" /></button></div><div className="flex-1 overflow-y-auto p-5"><AuditTimeline events={auditEvents} darkMode={darkMode} /></div><div className={`border-t p-4 text-xs ${muted} ${darkMode ? "border-slate-800" : "border-slate-200"}`}>Events are stored in this browser session only; this is not a tamper-proof audit service.</div></aside></div>}
+
+      {/* Create folder modal */}
+      {showNewFolder && <Modal title="Create a folder" subtitle="Add a category to this demo workspace." onClose={() => { setShowNewFolder(false); setFolderError(""); }} darkMode={darkMode}><form onSubmit={(e) => { e.preventDefault(); createFolder(); }} className="space-y-4"><div><label className="mb-1.5 block text-sm font-semibold">Folder name</label><input autoFocus value={newFolderName} onChange={(e) => { setNewFolderName(e.target.value); setFolderError(""); }} placeholder="e.g. Tax Documents" className={inputClass} />{folderError && <p className="mt-1 text-sm text-rose-600">{folderError}</p>}</div><div className="flex justify-end gap-2"><button type="button" onClick={() => setShowNewFolder(false)} className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold">Cancel</button><button type="submit" className="rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white">Create folder</button></div></form></Modal>}
+
+      {/* Upload modal */}
+      {showUpload && <Modal title="Upload documents" subtitle="Files are added to this browser session, not a server." onClose={() => setShowUpload(false)} darkMode={darkMode}><div className="space-y-4"><div onDragOver={(e: DragEvent<HTMLDivElement>) => { e.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={(e: DragEvent<HTMLDivElement>) => { e.preventDefault(); setDragging(false); addFiles(e.dataTransfer.files); }} onClick={() => fileInputRef.current?.click()} className={`cursor-pointer rounded-2xl border-2 border-dashed p-7 text-center transition ${dragging ? "border-blue-500 bg-blue-50" : darkMode ? "border-slate-700 hover:border-blue-400" : "border-slate-300 hover:border-blue-400 hover:bg-blue-50/40"}`}><Upload className="mx-auto h-8 w-8 text-blue-600" /><p className="mt-3 font-semibold">Drop files here or browse</p><p className={`mt-1 text-xs ${muted}`}>Multiple files supported Â· common document and image types</p><input ref={fileInputRef} type="file" multiple className="hidden" onChange={(e: ChangeEvent<HTMLInputElement>) => { if (e.target.files) addFiles(e.target.files); e.target.value = ""; }} /></div>{selectedFiles.length > 0 && <div className={`max-h-36 space-y-2 overflow-y-auto rounded-xl border p-3 ${darkMode ? "border-slate-800" : "border-slate-200"}`}>{selectedFiles.map((f, i) => <div key={`${f.name}-${f.size}-${i}`} className="flex items-center gap-2 text-sm">{iconFor(fileType(f.name))}<span className="min-w-0 flex-1 truncate">{f.name}</span><span className={`text-xs ${muted}`}>{formatSize(f.size)}</span><button onClick={() => setSelectedFiles((prev) => prev.filter((_, idx) => idx !== i))} aria-label={`Remove ${f.name}`}><X className="h-4 w-4" /></button></div>)}</div>}<div className="grid gap-3 sm:grid-cols-2"><div><label className="mb-1.5 block text-sm font-semibold">Destination folder</label><select value={uploadFolder} onChange={(e) => setUploadFolder(e.target.value)} className={inputClass}>{categories.map((c) => <option key={c}>{c}</option>)}</select></div><div><label className="mb-1.5 block text-sm font-semibold">Sensitivity</label><select value={uploadSensitivity} onChange={(e) => setUploadSensitivity(e.target.value as Sensitivity)} className={inputClass}><option>Confidential</option><option>Public</option><option>Internal Only</option><option>Restricted</option></select></div></div>{uploadError && <p className="rounded-lg bg-rose-50 p-3 text-sm text-rose-700">{uploadError}</p>}<div className="flex justify-end gap-2"><button onClick={() => setShowUpload(false)} className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold">Cancel</button><button onClick={uploadFiles} className="rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-700">Add {selectedFiles.length || ""} file{selectedFiles.length === 1 ? "" : "s"}</button></div></div></Modal>}
+
+      {/* Rename modal */}
+      {renameDoc && <Modal title="Rename document" subtitle="The file remains in the same folder." onClose={() => setRenameDoc(null)} darkMode={darkMode}><form onSubmit={(e) => { e.preventDefault(); saveRename(); }} className="space-y-4"><div><label className="mb-1.5 block text-sm font-semibold">New file name</label><input autoFocus value={renameValue} onChange={(e) => setRenameValue(e.target.value)} className={inputClass} /></div><div className="flex justify-end gap-2"><button type="button" onClick={() => setRenameDoc(null)} className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold">Cancel</button><button type="submit" className="rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white">Save name</button></div></form></Modal>}
+    </main>
+  );
+}
+
+function StatCard({ icon, label, value, tone }: { icon: ReactNode; label: string; value: number | string; tone: "blue" | "violet" | "rose" | "amber" }) {
+  const tones = { blue: "bg-blue-50 text-blue-700", violet: "bg-violet-50 text-violet-700", rose: "bg-rose-50 text-rose-700", amber: "bg-amber-50 text-amber-700" };
+  return <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"><div className="flex items-center justify-between"><span className={`rounded-xl p-3 ${tones[tone]}`}>{icon}</span><MoreHorizontal className="h-5 w-5 text-slate-300" /></div><p className="mt-4 text-sm text-slate-500">{label}</p><p className="mt-1 text-2xl font-bold text-slate-900">{value}</p></div>;
+}
+function Modal({ title, subtitle, onClose, children, darkMode }: { title: string; subtitle?: string; onClose: () => void; children: ReactNode; darkMode: boolean }) {
+  return <div className="fixed inset-0 z-[80] flex items-center justify-center overflow-y-auto bg-slate-950/50 p-4 backdrop-blur-sm" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}><section className={`my-auto w-full max-w-xl rounded-2xl border p-5 shadow-2xl sm:p-6 ${darkMode ? "border-slate-800 bg-slate-900 text-slate-100" : "border-slate-200 bg-white text-slate-900"}`}><div className="mb-5 flex items-start justify-between gap-3"><div><h3 className="text-lg font-bold">{title}</h3>{subtitle && <p className="mt-1 break-words text-sm text-slate-500">{subtitle}</p>}</div><button onClick={onClose} aria-label="Close modal" className="rounded-lg p-2 hover:bg-slate-100"><X className="h-5 w-5" /></button></div>{children}</section></div>;
+}
+function AuditTimeline({ events, darkMode }: { events: AuditEvent[]; darkMode: boolean }) {
+  const iconForAction = (action: string) => {
+    if (action === "Uploaded") return <Upload className="h-4 w-4" />;
+    if (action === "Viewed") return <Eye className="h-4 w-4" />;
+    if (action === "Downloaded") return <Download className="h-4 w-4" />;
+    if (action === "Flagged") return <AlertTriangle className="h-4 w-4" />;
+    if (action === "Permission Changed") return <LockKeyhole className="h-4 w-4" />;
+    if (action === "Deleted") return <Trash2 className="h-4 w-4" />;
+    if (action === "Renamed") return <Pencil className="h-4 w-4" />;
+    return <Activity className="h-4 w-4" />;
+  };
+  return <div className="space-y-0">{events.map((event, index) => <div key={event.id} className="relative flex gap-3 pb-6 last:pb-0"><div className="relative flex w-10 shrink-0 justify-center"><span className={`z-10 flex h-9 w-9 items-center justify-center rounded-full ${event.action === "Flagged" ? "bg-amber-100 text-amber-700" : "bg-blue-100 text-blue-700"}`}>{iconForAction(event.action)}</span>{index < events.length - 1 && <span className={`absolute top-9 h-full w-px ${darkMode ? "bg-slate-800" : "bg-slate-200"}`} />}</div><div className="min-w-0 flex-1 pt-0.5"><div className="flex flex-wrap items-center justify-between gap-2"><p className="font-semibold">{event.action}</p><span className="flex items-center gap-1 text-xs text-slate-500"><Clock3 className="h-3 w-3" />{event.time}</span></div><p className="mt-1 break-words text-sm text-slate-500">{event.documentName}</p><div className="mt-2 flex items-center gap-2"><span className="flex h-6 w-6 items-center justify-center rounded-full bg-slate-200 text-[10px] font-bold text-slate-700">{event.user.split(" ").map((p) => p[0]).join("").slice(0, 2)}</span><span className="text-xs text-slate-500">{event.user}</span></div>{event.detail && <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900">{event.detail}</p>}</div></div>)}</div>;
+}
+
